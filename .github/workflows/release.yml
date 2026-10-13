@@ -24,6 +24,7 @@ jobs:
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 24
+          package-manager-cache: false # package.json에 packageManager가 생겨도 캐시를 켜지 않게
       # 의존성 설치 스크립트를 돌리지 않는다
       - run: npm ci --ignore-scripts
       # 태그·package.json·manifest·코드의 버전이 모두 같아야 한다
@@ -56,6 +57,7 @@ jobs:
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 24
+          package-manager-cache: false # package.json에 packageManager가 생겨도 캐시를 켜지 않게
       - run: npm ci --ignore-scripts
       - run: npm run lint
       - run: npm test

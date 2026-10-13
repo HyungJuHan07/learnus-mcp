@@ -1,7 +1,14 @@
 import { constants, createHash, createPublicKey, publicEncrypt } from 'node:crypto'
 import * as cheerio from 'cheerio/slim'
 import { CookieJar } from 'tough-cookie'
-import { assertNotBlocked, LearnUsError, looksLoggedOut, request, type Page } from './client.ts'
+import {
+  assertNotBlocked,
+  LearnUsError,
+  loginHome,
+  looksLoggedOut,
+  request,
+  type Page,
+} from './client.ts'
 import { BASE_URL, env, PORTAL_URL, REPO_URL, type Host } from './config.ts'
 
 type Credentials = { username: string; password: string }
@@ -232,6 +239,8 @@ async function httpLogin(creds: Credentials, progress: Progress): Promise<Cookie
   // 대시보드로 바로 오지 않았으면(자바스크립트 이동 등) 대시보드로 한 번 확인한다.
   if (!loggedIn(page)) page = await go({ method: 'GET', url: `${BASE_URL}/` }, page.url)
   if (!loggedIn(page)) throw new LoginError('LAYOUT_CHANGED')
+  // 마지막에 받은 화면(대개 대시보드)을 Client가 캐시에 쓰게 남긴다 (로그인 직후 같은 화면을 다시 받지 않게)
+  loginHome.set(jar, page)
   return jar
 }
 

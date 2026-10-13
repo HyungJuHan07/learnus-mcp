@@ -47,7 +47,11 @@ export async function reply(fn: () => Promise<unknown>) {
   }
 }
 
-const id = (what: string) => z.string().regex(/^\d+$/).describe(what)
+const id = (what: string) =>
+  z
+    .string()
+    .regex(/^\d{1,12}$/)
+    .describe(what)
 const READ_ONLY = { readOnlyHint: true, openWorldHint: true }
 
 /** 도구 10개를 단 MCP 서버. 도구 호출마다 client.withSignal()로 새 클라이언트를 만든다 (로그인 재시도 몫이 호출마다). */
@@ -86,7 +90,7 @@ export function createServer(
 
   tool(
     'get_today_briefing',
-    '"오늘 할 일", "오늘 LearnUs 정리"처럼 한 번에 묻는 질문에 쓴다: 3일 안 과제·퀴즈 마감, 3일 안 출석 기한인 안 본 동영상, 최근 3일 공지. 전 과목 페이지를 읽어서 처음 부를 땐 로그인 포함 30초 이상 걸릴 수 있다.',
+    '"오늘 할 일", "오늘 LearnUs 정리"처럼 한 번에 묻는 질문에 쓴다: 3일 안 과제·퀴즈 마감, 3일 안 출석 기한인 안 본 동영상, 최근 3일 공지. 전 과목 페이지를 하나씩 읽어서 처음 부를 땐 로그인 포함 시간이 걸린다 (과목 수 + 9번 요청).',
     {},
     (_, c) => todayBriefing(c),
   )
@@ -131,7 +135,7 @@ export function createServer(
 
   tool(
     'list_unwatched_videos',
-    '아직 완료 표시가 없고 출석·지각 기한이 지나지 않은 동영상 강의의 출석 인정 기간·지각 기한·길이를 가져온다 (조회만, 재생하지 않음). course_id가 없으면 전 과목이라 10초 이상 걸린다.',
+    '아직 완료 표시가 없고 출석·지각 기한이 지나지 않은 동영상 강의의 출석 인정 기간·지각 기한·길이를 가져온다 (조회만, 재생하지 않음). course_id가 없으면 전 과목 페이지를 하나씩 읽어 시간이 걸린다.',
     { course_id: id('특정 과목만 볼 때').optional() },
     ({ course_id }, c) => unwatchedVideos(c, course_id),
   )
@@ -153,7 +157,9 @@ export function createServer(
       material_id: z
         .string()
         .max(2000)
-        .describe('list_materials·get_announcement·get_assignment_detail의 material_id'),
+        .describe(
+          'list_materials·get_announcement·get_assignment_detail의 material_id (받은 값을 그대로)',
+        ),
       start: z.number().int().min(0).optional().describe('이어 읽을 위치 (기본 0)'),
       refresh: z
         .boolean()

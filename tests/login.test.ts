@@ -139,7 +139,7 @@ function fakeSites(
 
 async function loadAuth() {
   vi.resetModules()
-  // 요청 사이 1초 쉬는 것을 시험에서는 건너뛴다 (간격 자체는 security.test.ts에서 확인).
+  // 요청 사이 쉬는 것을 시험에서는 건너뛴다 (간격 자체는 아래 '로그인 간격' 시험과 security.test.ts에서 확인).
   vi.doMock('node:timers/promises', () => ({ setTimeout: async () => {} }))
   return import('../src/auth.ts')
 }
@@ -159,6 +159,45 @@ afterEach(() => {
 })
 
 describe('브라우저 없는 연세포털 로그인', () => {
+  it('로그인 간격: 연세포털로 가는 요청은 1초, LearnUs 단계는 0.2초, 로그인 뒤 데이터 요청은 0.1초 (원칙 6)', async () => {
+    const site = fakeSites({ correctPw: SECRET_PW })
+    const waits: number[] = []
+    vi.resetModules()
+    vi.doMock('node:timers/promises', () => ({
+      setTimeout: async (ms: number) => void waits.push(ms),
+    }))
+    // 시계를 멈춰 대기 시간을 정확히 본다 (러너가 느려도 흔들리지 않게)
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now())
+    const auth = await import('../src/auth.ts')
+    const { Client } = await import('../src/client.ts')
+    const c = new Client(() => auth.login(creds))
+    await c.relogin()
+    const loginWaits = waits.splice(0)
+    // 로그인이 받은 대시보드는 캐시에서 → 요청 없음. 데이터 간격은 캐시를 건너뛴 요청으로 본다.
+    await c.get('https://ys.learnus.org/')
+    expect(site.calls).toHaveLength(7)
+    await c.get('https://ys.learnus.org/', { cache: false })
+    // 로그인 7요청: 첫 요청은 기다리지 않고, 나머지는 가는 곳에 따라. 그 뒤 데이터 요청은 0.1초.
+    const loginCalls = site.calls.slice(1, 7)
+    expect(loginCalls.filter((x) => x.url.startsWith('https://infra.yonsei.ac.kr/'))).toHaveLength(
+      2,
+    )
+    expect(loginWaits).toEqual(
+      loginCalls.map((x) => (x.url.startsWith('https://infra.yonsei.ac.kr/') ? 1000 : 200)),
+    )
+    expect(waits).toEqual([100])
+  })
+
+  it('로그인이 받아 온 대시보드는 첫 조회에서 다시 받지 않는다', async () => {
+    const site = fakeSites({ correctPw: SECRET_PW })
+    const auth = await loadAuth()
+    const { Client } = await import('../src/client.ts')
+    const { listCourses } = await import('../src/learnus.ts')
+    await listCourses(new Client(() => auth.login(creds)).withSignal())
+    expect(site.calls.filter((x) => x.url === 'https://ys.learnus.org/')).toHaveLength(1)
+    expect(site.calls).toHaveLength(7)
+  })
+
   it('포털과 같은 방식으로 암호화해 로그인하고 LearnUs 쿠키를 얻는다', async () => {
     const site = fakeSites({ correctPw: SECRET_PW })
     const auth = await loadAuth()
@@ -262,7 +301,12 @@ describe('브라우저 없는 연세포털 로그인', () => {
   })
 
   it('로그인 제출(POST) 뒤 네트워크 오류·5xx는 결과를 모르는 실패로 기억하고 다시 보내지 않는다', async () => {
-    for (const o of [{ authNetworkError: true }, { authStatus: 500 }, { authStatus: 503 }]) {
+    for (const o of [
+      { authNetworkError: true },
+      { authStatus: 500 },
+      { authStatus: 503 },
+      { authStatus: 429 },
+    ]) {
       const site = fakeSites({ correctPw: RIGHT_PW, ...o })
       const auth = await loadAuth()
       await expect(auth.login(creds)).rejects.toMatchObject({

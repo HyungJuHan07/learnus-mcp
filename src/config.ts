@@ -1,4 +1,4 @@
-export const VERSION = '0.2.0'
+export const VERSION = '0.2.1'
 export type Host = 'claude' | 'chatgpt'
 export const BASE_URL = 'https://ys.learnus.org'
 // 공식 저장소 (문제 신고·업데이트 안내용)

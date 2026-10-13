@@ -1,6 +1,6 @@
 {
   "name": "learnus-mcp",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "비공식(Unofficial) LearnUs 읽기 전용 로컬 MCP 서버 — 연세대학교와 무관한 학생 프로젝트",
   "license": "MIT",
   "private": true,
@@ -12,7 +12,7 @@
     "node": ">=22.18"
   },
   "scripts": {
-    "build": "esbuild src/index.ts --bundle --platform=node --target=node22 --format=cjs --outfile=dist/index.cjs --banner:js=\"#!/usr/bin/env node\" --define:import.meta.dirname=__dirname --define:import.meta.filename=__filename --metafile=dist/meta.json && node scripts/notices.ts",
+    "build": "esbuild src/index.ts --bundle --platform=node --target=node22 --format=cjs --outfile=dist/index.cjs --minify --banner:js=\"#!/usr/bin/env node\" --define:import.meta.dirname=__dirname --define:import.meta.filename=__filename --metafile=dist/meta.json && node scripts/notices.ts",
     "lint": "tsc && eslint . && prettier --check . && node scripts/check-secrets.ts",
     "format": "prettier --write .",
     "test": "vitest run",

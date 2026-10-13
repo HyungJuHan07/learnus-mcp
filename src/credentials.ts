@@ -6,7 +6,7 @@ export type Credentials = { username: string; password: string }
 /** rejected: 다른 대화(서버 프로세스)에서 이 조합으로 로그인이 실패했다는 표시. 다시 저장하면 지워진다. */
 export type StoredCredentials = Credentials & { rejected?: string }
 const FAILURE =
-  'OS 금고에 접근하지 못했습니다. 금고 잠금·접근 권한과 ChatGPT용 설치 파일을 확인해 주세요. (맥에서 브라우저로 받아 Finder로 풀었다면 설치 안내의 다운로드 표시 지우기를 따라 주세요.)'
+  "OS 금고에 접근하지 못했습니다. 금고 잠금·접근 권한과 ChatGPT용 설치 파일을 확인해 주세요. (맥에서 브라우저로 받아 Finder로 풀었다면 설치 안내의 다운로드 표시 지우기를 따라 주세요. 맥에서 키체인 확인 창이 떴다면 '항상 허용'을 누른 뒤 다시 요청해 주세요.)"
 
 function valid(value: unknown): value is StoredCredentials {
   if (!value || typeof value !== 'object') return false

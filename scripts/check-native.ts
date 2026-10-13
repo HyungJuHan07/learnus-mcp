@@ -13,6 +13,18 @@ const helper = resolve(
   'dist/native',
   `learnus-credentials${process.platform === 'win32' ? '.exe' : ''}`,
 )
+// 맥 헬퍼는 두 아키텍처 모두 서명이 온전해야 한다 (실행하지 않고 서명만 본다)
+if (process.platform === 'darwin') {
+  for (const arch of ['arm64', 'x86_64']) {
+    const r = spawnSync('/usr/bin/codesign', ['--verify', '--strict', '--arch', arch, helper])
+    assert.equal(r.status, 0, `${arch} 헬퍼 서명 확인 실패`)
+    // cdhash가 지난 릴리스와 다르면 업데이트한 맥에서 키체인 허용 창이 다시 뜬다 (소스가 같아도 빌드 이미지가 바뀌면 달라진다)
+    const info = spawnSync('/usr/bin/codesign', ['-dvvv', '--arch', arch, helper], {
+      encoding: 'utf8',
+    })
+    console.log(`${arch} ${/^CDHash=.*$/m.exec(info.stderr)?.[0] ?? 'CDHash 없음'}`)
+  }
+}
 const refused = (status: number | null, stdout: string) =>
   status === 1 && stdout === '{"status":"error"}'
 

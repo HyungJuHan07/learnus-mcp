@@ -974,7 +974,10 @@ describe('여러 페이지를 묶는 기능', () => {
     ])
     expect(requested).toEqual([`${B}/course/view.php?id=1`])
     const id = (list[1] as unknown as { material_id: string }).material_id
+    // 짧은 id '<과목 id>-<cmid>'. 목록에서 본 것이라 과목 페이지를 다시 열지 않는다.
+    expect(id).toBe('1-52')
     const r = await downloadMaterial(client, id)
+    expect(requested.filter((u) => u.includes('/course/view.php'))).toHaveLength(1)
     expect(r).toMatchObject({
       folder: '강의자료 lec5',
       files: [{ name: 'lec5.pdf', downloaded: false }],
@@ -1000,8 +1003,36 @@ describe('여러 페이지를 묶는 기능', () => {
     })
     const item = (await listMaterials(client, '1', 6)) as { name: string; material_id?: string }[]
     const folder = item.find((m) => m.name === '가짜 폴더')!
-    expect(decodeId(folder.material_id!).u).toBe('/mod/folder/view.php?id=777')
+    expect(folder.material_id).toBe('1-777')
     await downloadMaterial(client, folder.material_id!)
     expect(requested.at(-1)).toBe(`${B}/mod/folder/view.php?id=777`)
+    expect(requested.some((u) => u.includes('/mod/vod/'))).toBe(false)
+  })
+
+  it('짧은 material_id는 다른 프로세스에서도 그 과목 페이지의 자료 활동으로만 찾는다', async () => {
+    const folder = `<span class="fp-filename-icon"><a href="${B}/pluginfile.php/7/mod_folder/content/0/lec5.pdf?forcedownload=1"><span class="fp-filename">lec5.pdf</span></a></span>`
+    // 목록을 본 적 없는 새 프로세스 (예: ChatGPT의 새 대화가 옛 대화의 id를 쓴 경우)
+    vi.resetModules()
+    const fresh = await import('../src/materials.ts')
+    const { client, requested } = siteClient({
+      [`${B}/course/view.php?id=1`]: COURSE,
+      [`${B}/mod/folder/view.php?id=52`]: folder,
+    })
+    expect(await fresh.downloadMaterial(client, '1-52')).toMatchObject({ folder: '강의자료 lec5' })
+    expect(requested).toEqual([`${B}/course/view.php?id=1`, `${B}/mod/folder/view.php?id=52`])
+    // 그 페이지에 있어도 자료가 아닌 활동(동영상·과제·게시판·링크)이나 없는 cmid는 거절하고, 과목 페이지 밖은 열지 않는다
+    for (const id of ['1-60', '1-61', '1-53', '1-10', '1-54', '1-999']) {
+      requested.length = 0
+      await expect(fresh.downloadMaterial(client, id)).rejects.toThrow('material_id')
+      expect(requested.every((u) => u === `${B}/course/view.php?id=1`)).toBe(true)
+    }
+  })
+
+  it('짧은 id 꼴이 아니면 예전 형식으로만 읽고, 잘못된 값은 아무것도 열지 않고 거절한다', async () => {
+    const { client, requested } = siteClient({ [`${B}/course/view.php?id=1`]: COURSE })
+    for (const id of ['1-52-3', '1.52', '-52', '1-', ' 1-52', '1-52\n', '1 - 52', '1-0x34']) {
+      await expect(downloadMaterial(client, id)).rejects.toThrow('material_id')
+    }
+    expect(requested).toEqual([])
   })
 })

@@ -36,6 +36,8 @@ const normalized = (path: string) => {
   return u.origin === BASE_URL ? u.pathname + u.search : ''
 }
 
+const UNKNOWN_ID = '알 수 없는 material_id입니다. list_materials로 받은 id를 그대로 써 주세요.'
+
 export const encodeId = (r: Ref) => Buffer.from(JSON.stringify(r)).toString('base64url')
 
 export function decodeId(id: string): Ref {
@@ -55,9 +57,7 @@ export function decodeId(id: string): Ref {
     !(r.w === null || Number.isInteger(r.w)) ||
     !(r.n === undefined || typeof r.n === 'string')
   ) {
-    throw new LearnUsError(
-      '알 수 없는 material_id입니다. list_materials로 받은 id를 그대로 써 주세요.',
-    )
+    throw new LearnUsError(UNKNOWN_ID)
   }
   return r as Ref
 }
@@ -199,6 +199,39 @@ export function parseFolder(html: string) {
   }))
 }
 
+/** 과목 페이지의 자료 활동 → Ref. 주소는 HTML의 href가 아니라 종류와 id로 만든다 (다른 화면이 열리지 않게). */
+const refOf = (
+  course: string,
+  a: { type: string; cmid: string; week: number | null; name: string },
+): Ref => ({
+  u: `/mod/${a.type}/view.php?id=${a.cmid}`,
+  c: course,
+  w: a.week,
+  n: a.name,
+})
+
+// 강의자료 목록의 material_id는 '<과목 id>-<cmid>'로 짧게 둔다 (AI가 그대로 옮겨 적는 글자를 줄이려고).
+// 이 프로세스에서 목록으로 본 것은 메모리에서, 아니면 그 과목 페이지(10분 캐시)의 자료 활동에서만 찾는다.
+// ponytail: 프로세스가 끝날 때까지 쌓인다 (항목당 수백 바이트).
+const SHORT_ID = /^(\d{1,12})-(\d{1,12})$/
+const MATERIAL_TYPES = ['ubfile', 'resource', 'folder']
+const listed = new Map<string, Ref>()
+
+/** material_id → Ref. 짧은 id가 아니면 예전 형식(경로를 담은 base64, 폴더 안 파일·첨부)으로 읽는다. */
+async function resolveId(client: Client, id: string): Promise<Ref> {
+  const m = SHORT_ID.exec(id)
+  if (!m) return decodeId(id)
+  let ref = listed.get(id)
+  if (!ref) {
+    const page = await coursePage(client, m[1])
+    const a = page.activities.find((x) => x.cmid === m[2] && MATERIAL_TYPES.includes(x.type))
+    if (!a) throw new LearnUsError(UNKNOWN_ID)
+    ref = refOf(page.name, a)
+  }
+  // 예전 형식과 같은 검사를 거친다
+  return decodeId(encodeId(ref))
+}
+
 /** 강의자료 목록. 다운로드는 하지 않고, 폴더도 열지 않는다 (폴더 안은 download_material로). */
 export async function listMaterials(client: Client, courseId: string, week?: number) {
   const page = await coursePage(client, courseId)
@@ -214,23 +247,19 @@ export async function listMaterials(client: Client, courseId: string, week?: num
       out.push({ ...base, name: a.name, kind: '외부 링크', url: a.url })
       continue
     }
-    // 주소는 HTML의 href가 아니라 종류와 id로 만든다 (다른 화면이 열리지 않게).
-    const ref: Ref = {
-      u: `/mod/${a.type}/view.php?id=${a.cmid}`,
-      c: page.name,
-      w: a.week,
-      n: a.name,
-    }
+    const ref = refOf(page.name, a)
+    const material_id = `${courseId}-${a.cmid}`
+    listed.set(material_id, ref)
     if (a.type === 'folder') {
       // 열면 LearnUs에 열람 기록이 남을 수 있어, 사용자가 그 폴더를 원할 때만 연다.
-      out.push({ ...base, name: a.name, kind: '폴더', material_id: encodeId(ref) })
+      out.push({ ...base, name: a.name, kind: '폴더', material_id })
     } else {
       out.push({
         ...base,
         name: a.name,
         kind: '파일',
         info: a.info,
-        material_id: encodeId(ref),
+        material_id,
         downloaded: !!existing(ref),
       })
     }
@@ -421,7 +450,7 @@ export async function downloadMaterial(
   start = 0,
   refresh = false,
 ) {
-  const ref = decodeId(materialId)
+  const ref = await resolveId(client, materialId)
   if (ref.u.startsWith('/mod/folder/')) return { ...(await openFolder(client, ref)) }
   // 이어 읽기(start > 0)에서는 refresh를 무시한다 (8,000자마다 다시 받지 않게)
   const old = refresh && start === 0 ? undefined : existing(ref)

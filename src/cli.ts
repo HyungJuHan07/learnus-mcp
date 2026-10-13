@@ -27,6 +27,12 @@ const HELP = `learnus-mcp ${VERSION} — 비공식(Unofficial) LearnUs 읽기 �
   learnus-mcp credentials-clear   사람이 확인한 뒤 ChatGPT용 금고 항목 삭제
   learnus-mcp chatgpt-config      비밀값 없는 ChatGPT MCP 설정 예시 출력`
 
+// eslint-disable-next-line no-control-regex -- 터미널 제어 문자(C0·DEL·C1)를 찾는다
+const CONTROL = /[\u0000-\u001f\u007f-\u009f]/g
+/** LearnUs·포털에서 온 글의 제어 문자를 \xNN 글자로 바꿔 터미널이 명령으로 읽지 못하게 한다 (줄 지우기·가짜 줄 막기). */
+export const term = (s: string) =>
+  s.replace(CONTROL, (c) => `\\x${c.charCodeAt(0).toString(16).padStart(2, '0')}`)
+
 export async function runCli(command: string) {
   if (command === 'chatgpt') return createChatGPTServer().connect(new StdioServerTransport())
   if (command === 'chatgpt-config')
@@ -106,12 +112,12 @@ async function check() {
   }
   const username = (await ask('연세포털 아이디(학번): ')).trim()
   const password = await ask('비밀번호 (화면에 표시되지 않음): ', true)
-  console.log('로그인 중입니다 (요청 사이 1초씩 쉬어서 10초쯤 걸립니다)...')
+  console.log('로그인 중입니다 (몇 초 걸립니다)...')
   let jar: CookieJar | undefined
   try {
     jar = await login({ username, password })
   } catch (e) {
-    console.error(userMessage(e, '알 수 없는 오류로 로그인에 실패했습니다.'))
+    console.error(term(userMessage(e, '알 수 없는 오류로 로그인에 실패했습니다.')))
     // 위 문구는 Claude용이다. check는 실행할 때마다 새로 로그인하므로 다시 실행하면 비밀번호가 한 번 더 간다.
     if (e instanceof LoginError && e.code !== 'NO_CREDENTIALS' && e.code !== 'KOREAN_INPUT') {
       console.error(
@@ -120,11 +126,11 @@ async function check() {
     }
     // 문제 신고용: 거쳐 간 단계 (경로·폼 칸 이름만, 값 없음)
     if (e instanceof LoginError && e.trace.length)
-      console.error(`\n거쳐 간 단계:\n- ${e.trace.join('\n- ')}`)
+      console.error(`\n거쳐 간 단계:\n- ${e.trace.map(term).join('\n- ')}`)
     process.exitCode = 1
     return
   }
-  console.log('로그인 성공. 조회 기능을 하나씩 시험합니다 (1분 안팎)...\n')
+  console.log('로그인 성공. 조회 기능을 하나씩 시험합니다 (과목 수만큼 페이지를 읽습니다)...\n')
   // 처음엔 방금 로그인한 세션, 그 뒤 만료되면 같은 아이디·비밀번호로 다시 로그인
   const session = new Client(async () => {
     const first = jar
@@ -156,11 +162,11 @@ async function step<T>(label: string, run: () => Promise<T>): Promise<T | undefi
     const list = Array.isArray(result) ? result : [result]
     const first = JSON.stringify(list[0] ?? null)
     console.log(
-      `✔ ${label}: ${list.length}개${list.length ? ` — 첫 항목 ${first.slice(0, 300)}` : ''}`,
+      term(`✔ ${label}: ${list.length}개${list.length ? ` — 첫 항목 ${first.slice(0, 300)}` : ''}`),
     )
     return result
   } catch (e) {
-    console.log(`✘ ${label}: ${userMessage(e, '알 수 없는 오류')}`)
+    console.log(term(`✘ ${label}: ${userMessage(e, '알 수 없는 오류')}`))
     return undefined
   }
 }

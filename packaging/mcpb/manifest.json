@@ -2,7 +2,7 @@
   "manifest_version": "0.2",
   "name": "learnus-mcp",
   "display_name": "LearnUs (비공식)",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "연세대학교 LearnUs의 마감·공지·과제·동영상 출석 기간·강의자료를 Claude에서 조회합니다. 비공식 학생 프로젝트이며 연세대학교와 무관합니다.",
   "long_description": "조회 전용입니다. 과제 제출·글 작성·출석 처리·동영상 재생은 하지 않습니다. 단, 브라우저로 볼 때처럼 조회한 화면은 LearnUs에 접속 기록·공지 조회수·자료 열람(완료) 표시가 남을 수 있습니다. 아이디·비밀번호는 Claude 데스크톱이 이 컴퓨터의 OS 금고 키로 암호화해 설정에 보관하고, LearnUs·연세포털 외에는 어디로도 보내지 않습니다. 강의자료는 요청할 때만 다운로드 폴더(기본: 홈 폴더의 LearnUs)에 받습니다. 단, Claude가 읽는 조회 결과(공지 본문, 자료 내용 등)는 Anthropic 클라우드로 전송됩니다. 받은 강의자료는 교수님 저작물이므로 재배포하지 마세요. 수업에서 AI 사용을 제한했다면 그 과목 자료는 받거나 요약하지 마세요. LearnUs 한국어 화면에서 확인했습니다. 문제 신고: https://github.com/HyungJuHan07/learnus-mcp/issues",
   "author": {

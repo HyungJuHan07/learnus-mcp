@@ -236,13 +236,248 @@ describe('HTTP 클라이언트', () => {
     expect(login).toHaveBeenCalledTimes(1)
   })
 
-  it('요청 사이 최소 1초, 같은 주소는 캐시', async () => {
+  it('요청 사이 최소 0.1초, 같은 주소는 캐시', async () => {
     const { c, calls } = await setup([html(LOGGED_IN), html(LOGGED_IN)])
     await Promise.all([c.get('https://ys.learnus.org/a'), c.get('https://ys.learnus.org/b')])
     await c.get('https://ys.learnus.org/a')
     expect(calls).toHaveLength(2)
+    expect(calls[1].at - calls[0].at).toBeGreaterThanOrEqual(90)
+  }, 10_000)
+
+  it('동시 1개, 앞 응답이 끝나고 0.1초 뒤에 다음 데이터 요청을 보낸다', async () => {
+    const mod = await load()
+    const spans: { start: number; end: number }[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        const span = { start: Date.now(), end: 0 }
+        spans.push(span)
+        await new Promise((r) => setTimeout(r, 50))
+        span.end = Date.now()
+        return html(LOGGED_IN)
+      }),
+    )
+    const c = new mod.Client(async () => sessionJar())
+    await Promise.all(['a', 'b', 'c'].map((p) => c.get(`https://ys.learnus.org/${p}`)))
+    expect(spans).toHaveLength(3)
+    for (let i = 1; i < spans.length; i++) {
+      expect(spans[i].start - spans[i - 1].end).toBeGreaterThanOrEqual(95)
+    }
+  }, 10_000)
+
+  it.each([500, 403])(
+    '%d 뒤로는 그 프로세스의 데이터 요청 간격을 계속 1초로 되돌린다',
+    async (status) => {
+      const { c, calls } = await setup([html('', { status }), html(LOGGED_IN), html(LOGGED_IN)])
+      await expect(c.get('https://ys.learnus.org/a')).rejects.toThrow(`응답 오류 ${status}`)
+      await c.withSignal().get('https://ys.learnus.org/b')
+      await c.withSignal().get('https://ys.learnus.org/c')
+      expect(calls[1].at - calls[0].at).toBeGreaterThanOrEqual(990)
+      expect(calls[2].at - calls[1].at).toBeGreaterThanOrEqual(990)
+    },
+    10_000,
+  )
+
+  it('서버가 힘들다는 신호 뒤로는 로그인의 LearnUs 단계도 1초 간격', async () => {
+    const { c, calls } = await setup([html('', { status: 500 }), html(LOGGED_IN)])
+    await expect(c.get('https://ys.learnus.org/a')).rejects.toThrow('응답 오류 500')
+    const mod = await import('../src/client.ts')
+    // 로그인 단계처럼 데이터 guard가 아닌 요청 (평소 0.2초)
+    await mod.request(sessionJar(), 'GET', 'https://ys.learnus.org/login.php', { guard: () => {} })
     expect(calls[1].at - calls[0].at).toBeGreaterThanOrEqual(990)
   }, 10_000)
+
+  it.each([
+    ['대시보드(/)', 'https://ys.learnus.org/', LOGGED_IN, 0],
+    ['다른 주소(/my/)', 'https://ys.learnus.org/my/', LOGGED_IN, 1],
+    ['Moodle 화면이 아님', 'https://ys.learnus.org/', '<html>점검</html>', 1],
+  ])('로그인이 받은 화면은 %s일 때만 캐시에 넣는다', async (_, url, text, sent) => {
+    const mod = await load()
+    const fetch = vi.fn(async () => html(LOGGED_IN))
+    vi.stubGlobal('fetch', fetch)
+    const c = new mod.Client(async () => {
+      const jar = sessionJar()
+      mod.loginHome.set(jar, { url, text, contentType: 'text/html' })
+      return jar
+    })
+    await c.get('https://ys.learnus.org/')
+    expect(fetch).toHaveBeenCalledTimes(sent)
+  })
+
+  it('세션이 끊겨 다시 로그인하면, 로그인이 받은 대시보드로 답하고 / 를 다시 받지 않는다', async () => {
+    const mod = await load()
+    const fetch = vi.fn(async () => html(LOGGED_OUT))
+    vi.stubGlobal('fetch', fetch)
+    let logins = 0
+    const c = new mod.Client(async () => {
+      const jar = sessionJar()
+      if (logins++ > 0) {
+        mod.loginHome.set(jar, {
+          url: 'https://ys.learnus.org/',
+          text: LOGGED_IN,
+          contentType: 'text/html',
+        })
+      }
+      return jar
+    })
+    await c.relogin()
+    expect((await c.get('https://ys.learnus.org/', { cache: false })).text).toBe(LOGGED_IN)
+    expect(fetch).toHaveBeenCalledOnce()
+    expect(logins).toBe(2)
+  })
+
+  it('데이터 요청이 로그인 화면으로 넘겨지면 그 화면은 받지 않고 다시 로그인한다', async () => {
+    const { c, calls, login } = await setup([
+      html('', { status: 303, headers: { location: '/login/index.php' } }),
+      html(LOGGED_IN),
+    ])
+    await c.get('https://ys.learnus.org/course/view.php?id=1')
+    expect(calls.map((x) => new URL(x.url).pathname)).toEqual([
+      '/course/view.php',
+      '/course/view.php',
+    ])
+    expect(login).toHaveBeenCalledTimes(2)
+  })
+
+  it('막힌 화면(로그아웃)으로 넘겨지면 지금처럼 막고, 다시 로그인하지 않는다', async () => {
+    const { c, calls, login } = await setup([
+      html('', { status: 303, headers: { location: '/login/logout.php?sesskey=x' } }),
+    ])
+    await expect(c.get('https://ys.learnus.org/course/view.php?id=1')).rejects.toThrow(
+      '열지 않는 화면',
+    )
+    expect(calls).toHaveLength(1)
+    expect(login).toHaveBeenCalledOnce()
+  })
+
+  it('200으로 온 차단·점검 화면 뒤로도 1초 간격', async () => {
+    const { c, calls } = await setup([html('<html><body>차단</body></html>'), html(LOGGED_IN)])
+    await expect(c.get('https://ys.learnus.org/a')).rejects.toThrow('예상과 다른 화면')
+    await c.get('https://ys.learnus.org/b')
+    expect(calls[1].at - calls[0].at).toBeGreaterThanOrEqual(990)
+  }, 10_000)
+
+  it('연결 오류가 두 번 이어지면 더 보내지 않는다 (재시도는 한 번만)', async () => {
+    const { c, calls } = await setup([
+      new TypeError('fetch failed'),
+      new TypeError('fetch failed'),
+      html(LOGGED_IN),
+    ])
+    await expect(c.get('https://ys.learnus.org/a')).rejects.toThrow('연결하지 못했습니다')
+    expect(calls).toHaveLength(2)
+  }, 10_000)
+
+  it('연결 오류는 1초 쉬고 한 번만 다시 보내고, 그 뒤로는 1초 간격', async () => {
+    const { c, calls } = await setup([
+      new TypeError('fetch failed'),
+      html(LOGGED_IN),
+      html(LOGGED_IN),
+    ])
+    await c.get('https://ys.learnus.org/a')
+    await c.get('https://ys.learnus.org/b')
+    expect(calls).toHaveLength(3)
+    expect(calls[1].at - calls[0].at).toBeGreaterThanOrEqual(990)
+    expect(calls[2].at - calls[1].at).toBeGreaterThanOrEqual(990)
+  }, 10_000)
+
+  it('429·503이면 멈추고, 그동안 데이터 요청·새 로그인을 보내지 않는다', async () => {
+    const { c, calls, login } = await setup([
+      html('', { status: 503, headers: { 'retry-after': '120' } }),
+      html(LOGGED_IN),
+      html(LOGGED_IN),
+    ])
+    await expect(c.get('https://ys.learnus.org/a')).rejects.toThrow('2분 뒤 다시')
+    await expect(c.get('https://ys.learnus.org/b')).rejects.toThrow('멈췄습니다')
+    await expect(c.withSignal().relogin()).rejects.toThrow('멈췄습니다')
+    expect(calls).toHaveLength(1)
+    expect(login).toHaveBeenCalledOnce()
+    const now = Date.now()
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now + 121_000)
+    try {
+      await c.get('https://ys.learnus.org/b')
+      // 멈춤이 끝난 뒤에도 간격은 1초 (늦춘 채로)
+      const t = performance.now()
+      await c.get('https://ys.learnus.org/c')
+      expect(performance.now() - t).toBeGreaterThanOrEqual(990)
+    } finally {
+      clock.mockRestore()
+    }
+    expect(calls).toHaveLength(3)
+  }, 10_000)
+
+  it('멈춤이 걸리면 이미 대기열에 선 데이터 요청도 보내지 않는다', async () => {
+    const { c, calls } = await setup([html('', { status: 503 }), html(LOGGED_IN), html(LOGGED_IN)])
+    const r = await Promise.allSettled(
+      ['a', 'b', 'c'].map((p) => c.get(`https://ys.learnus.org/${p}`)),
+    )
+    expect(calls).toHaveLength(1)
+    for (const x of r) expect(String((x as PromiseRejectedResult).reason)).toContain('멈췄습니다')
+  })
+
+  it('멈춘 동안 더 짧은 멈춤 신호가 와도 줄이지 않는다', async () => {
+    const mod = await load()
+    const responses = [
+      html('', { status: 503, headers: { 'retry-after': '600' } }),
+      html('', { status: 429 }),
+    ]
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => responses.shift()!),
+    )
+    const c = new mod.Client(async () => sessionJar())
+    await expect(c.get('https://ys.learnus.org/a')).rejects.toThrow('10분 뒤')
+    // 진행 중이던 로그인 단계(멈춤 검사 없음)가 헤더 없는 429를 받은 경우
+    await expect(
+      mod.request(sessionJar(), 'GET', 'https://ys.learnus.org/login.php', { guard: () => {} }),
+    ).rejects.toThrow('10분 뒤')
+  }, 10_000)
+
+  it.each([
+    ['1', 60_000],
+    ['86400', 600_000],
+    ['later', 60_000],
+    ['(5분 뒤 날짜)', 300_000],
+  ])('Retry-After %s → 1분~10분으로 묶어 %dms 멈춘다', async (retryAfter, ms) => {
+    // 날짜 형식은 실행할 때 만든다 (모듈을 읽을 때 만들면 앞 시험이 쓴 시간만큼 짧아진다)
+    const date = retryAfter.startsWith('(')
+    const header = date ? new Date(Date.now() + 300_000).toUTCString() : retryAfter
+    const { c, calls } = await setup([
+      html('', { status: 429, headers: { 'retry-after': header } }),
+      html(LOGGED_IN),
+    ])
+    const t0 = Date.now()
+    await expect(c.get('https://ys.learnus.org/a')).rejects.toThrow('멈췄습니다')
+    // 날짜면 그 시각까지 (초 단위라 밀리초를 버린다), 아니면 받은 때부터 ms
+    const end = date ? Date.parse(header) : t0 + ms
+    const clock = vi.spyOn(Date, 'now')
+    try {
+      clock.mockReturnValue(end - 2000)
+      await expect(c.get('https://ys.learnus.org/b')).rejects.toThrow('멈췄습니다')
+      clock.mockReturnValue(end + 2000)
+      await c.get('https://ys.learnus.org/b')
+    } finally {
+      clock.mockRestore()
+    }
+    expect(calls).toHaveLength(2)
+  })
+
+  it('도구 호출 하나는 요청 40개까지만 보낸다', async () => {
+    vi.doMock('node:timers/promises', () => ({ setTimeout: async () => {} }))
+    try {
+      const mod = await load()
+      const fetch = vi.fn(async () => html(LOGGED_IN))
+      vi.stubGlobal('fetch', fetch)
+      const c = new mod.Client(async () => sessionJar()).withSignal()
+      for (let i = 0; i < 40; i++) await c.get(`https://ys.learnus.org/p${i}`)
+      await expect(c.get('https://ys.learnus.org/p40')).rejects.toThrow('40개 초과')
+      expect(fetch).toHaveBeenCalledTimes(40)
+      // 다음 도구 호출(새 클라이언트)은 다시 보낼 수 있다
+      await c.withSignal().get('https://ys.learnus.org/p41')
+      expect(fetch).toHaveBeenCalledTimes(41)
+    } finally {
+      vi.doUnmock('node:timers/promises')
+    }
+  })
 
   it('예상과 다른 200 화면(점검·JSON 등)은 캐시하지 않고 오류', async () => {
     const { c, calls } = await setup([

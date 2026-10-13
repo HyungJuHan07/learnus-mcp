@@ -32,6 +32,19 @@ if (process.platform === 'darwin') {
     ],
     { stdio: 'inherit' },
   )
+  // 링커는 arm64 쪽에만 ad-hoc 서명을 붙인다 → 합친 파일 전체(두 아키텍처)를 같은 이름으로 다시 서명
+  execFileSync(
+    '/usr/bin/codesign',
+    [
+      '--force',
+      '--sign',
+      '-',
+      '--identifier',
+      'learnus-credentials',
+      join(out, 'learnus-credentials'),
+    ],
+    { stdio: 'inherit' },
+  )
 } else if (process.platform === 'win32') {
   const compiler = join(
     process.env.SystemRoot ?? 'C:\\Windows',
