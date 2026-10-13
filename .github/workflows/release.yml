@@ -1,0 +1,143 @@
+name: release
+# v* 태그를 올리면 Claude용 learnus.mcpb·SHA256SUMS와 ChatGPT용 맥·윈도우 배포물·SHA256SUMS-chatgpt를 만들어 GitHub Releases에 올린다.
+# LearnUs에 접속·로그인하는 작업은 여기서 절대 실행하지 않는다 (AGENTS.md 금지).
+# 빌드(읽기 권한)와 올리기(쓰기 권한)를 나눠, 개발 의존성 코드는 쓰기 권한 없이만 돈다.
+# actions는 커밋 SHA로 고정한다 (주석은 그 SHA의 태그). 오염될 수 있는 npm 캐시는 쓰지 않는다.
+on:
+  push:
+    tags: ['v*']
+permissions: {}
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          fetch-depth: 0 # origin/main과 비교하려고 전체 기록을 받는다
+          persist-credentials: false
+      # 머지하지 않은 브랜치에 찍은 태그가 Latest가 되지 않게
+      - run: >-
+          git merge-base --is-ancestor HEAD origin/main ||
+          { echo "::error::태그 커밋이 main에 없습니다. main에 머지한 뒤 태그를 올리세요."; exit 1; }
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 24
+      # 의존성 설치 스크립트를 돌리지 않는다
+      - run: npm ci --ignore-scripts
+      # 태그·package.json·manifest·코드의 버전이 모두 같아야 한다
+      - run: >-
+          node -e "const v=process.env.GITHUB_REF_NAME.slice(1), p=require('./package.json').version,
+          m=require('./packaging/mcpb/manifest.json').version, c=/VERSION = '(.+)'/.exec(require('fs').readFileSync('src/config.ts','utf8'))[1];
+          if (new Set([v,p,m,c]).size !== 1) { console.error('버전 불일치', {v,p,m,c}); process.exit(1) }"
+      - run: npm run lint
+      - run: npm test
+      - run: npm run pack
+      - run: cd dist && sha256sum learnus.mcpb > SHA256SUMS
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: release
+          path: |
+            dist/learnus.mcpb
+            dist/SHA256SUMS
+          if-no-files-found: error
+  chatgpt:
+    strategy:
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 24
+      - run: npm ci --ignore-scripts
+      - run: npm run lint
+      - run: npm test
+      - run: npm run pack:chatgpt
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: chatgpt-${{ matrix.os }}
+          path: |
+            dist/learnus-chatgpt-*
+            dist/SHA256SUMS-chatgpt-*
+          if-no-files-found: error
+  release:
+    needs: [build, chatgpt]
+    runs-on: ubuntu-latest
+    # 태그가 달라도 공개는 한 번에 하나씩: Latest 조회부터 공개까지 다른 실행이 끼어들지 않게
+    concurrency:
+      group: release-publish
+      cancel-in-progress: false
+      # 기본(single)은 대기 중인 작업을 하나만 두고 나머지를 취소해, 겹친 태그가 릴리스 없이 남는다
+      queue: max
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: release
+          path: dist
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          pattern: chatgpt-*
+          merge-multiple: true
+          path: dist
+      - run: cat dist/SHA256SUMS-chatgpt-macos dist/SHA256SUMS-chatgpt-windows > dist/SHA256SUMS-chatgpt
+      - run: |
+          # 태그가 이 실행이 빌드한 커밋을 지금도 가리킬 때만 올린다. 지운 태그를 gh가 기본 브랜치에 다시 만들거나,
+          # 옮긴 태그에 옛 빌드를 덮어쓰지 않게 (없는 태그·조회 실패도 여기서 멈춘다)
+          [[ $(gh api "repos/{owner}/{repo}/commits/tags/$GITHUB_REF_NAME" --jq .sha) == "$GITHUB_SHA" ]] || { echo '::error::태그가 이 실행이 빌드한 커밋을 가리키지 않습니다'; exit 1; }
+          # 베타 태그(v0.2.0-beta.1 등)는 시험판으로 올려 Latest가 되지 않게 한다.
+          # 아닌 태그는 시험판 표시를 명시적으로 끈다 (웹에서 시험판으로 잘못 만든 릴리스도 Latest가 되게)
+          pre=false
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then pre=true; fi
+          # Latest는 지금 Latest보다 낮지 않은 정식 버전에만 준다. --latest를 빼면 GitHub은 새로 공개되는
+          # 릴리스를 Latest로 만들어, 옛 태그를 복구할 때 새 버전의 Latest를 빼앗는다
+          latest=false
+          if [[ $pre == false ]]; then
+            # 404(정식 릴리스 없음)만 첫 릴리스로 본다. 네트워크·5xx·요청 제한은 올리기 전에 멈춘다
+            if ! current=$(gh api 'repos/{owner}/{repo}/releases/latest' --jq .tag_name 2> latest.err); then
+              if ! grep -q 'HTTP 404' latest.err; then cat latest.err >&2; exit 1; fi
+              current=
+            fi
+            newest=$(printf '%s\n%s\n' "$current" "$GITHUB_REF_NAME" | sort -V | tail -n 1)
+            if [[ "$newest" == "$GITHUB_REF_NAME" ]]; then latest=true; fi
+          fi
+          # 초안까지 포함해 같은 태그의 릴리스를 찾는다. 조회가 실패하면 여기서 멈춘다
+          # (실패를 '없음'으로 보면 남아 있는 초안 옆에 같은 태그의 릴리스를 하나 더 만든다)
+          # 릴리스마다 '초안 여부, 불변 여부, 빠진 배포 파일 수'를 한 줄씩
+          existing=$(gh api --paginate 'repos/{owner}/{repo}/releases?per_page=100' --jq '.[] | select(.tag_name == env.GITHUB_REF_NAME) |
+            "\(.draft) \(.immutable) \(["learnus.mcpb", "SHA256SUMS", "learnus-chatgpt-macos.tar.gz", "learnus-chatgpt-windows.zip", "SHA256SUMS-chatgpt"] - [.assets[].name] | length)"')
+          case "$existing" in
+            '')
+              # 초안으로 만든 뒤 따로 공개한다. 한 번에 만들면 공개는 됐는데 응답만 오류로 올 때 gh가 그 릴리스를 지우고,
+              # 불변 릴리스는 지우면 같은 태그 이름을 다시 쓸 수 없다. 공개 전에 멈추면 재실행이 아래 초안 분기에서 마무리한다
+              gh release create "$GITHUB_REF_NAME" dist/learnus.mcpb dist/SHA256SUMS dist/learnus-chatgpt-macos.tar.gz dist/learnus-chatgpt-windows.zip dist/SHA256SUMS-chatgpt \
+                --draft --title "$GITHUB_REF_NAME" --generate-notes --prerelease="$pre"
+              gh release edit "$GITHUB_REF_NAME" --draft=false --prerelease="$pre" --latest="$latest" ;;
+            *$'\n'*)
+              # 아래 gh 명령은 태그로 릴리스를 다시 찾는데, 같은 태그가 여럿이면 공개본과 초안 중 먼저 찾은 쪽을 고친다
+              echo '::error::같은 태그의 릴리스가 여러 개입니다. 하나만 남기고 다시 실행하세요'; exit 1 ;;
+            'true '* | 'false false '*)
+              # 초안(태그를 지웠다 다시 올린 것 등)이나 불변이 아닌 공개 릴리스(Releases 화면에서 만든 것 등)는 파일을 올리고 공개한다
+              gh release upload "$GITHUB_REF_NAME" dist/learnus.mcpb dist/SHA256SUMS dist/learnus-chatgpt-macos.tar.gz dist/learnus-chatgpt-windows.zip dist/SHA256SUMS-chatgpt --clobber
+              gh release edit "$GITHUB_REF_NAME" --draft=false --prerelease="$pre" --latest="$latest" ;;
+            'false true 0')
+              # 공개된 불변 릴리스(Settings의 release immutability)는 파일을 바꿀 수 없다. 바꿀 일이면 버전을 올려 새 태그로 낸다.
+              # 같은 태그를 다시 실행한 것이면 시험판·Latest 표시만 맞춘다
+              gh release edit "$GITHUB_REF_NAME" --prerelease="$pre" --latest="$latest" ;;
+            'false true '*)
+              echo '::error::공개된 불변 릴리스에 배포 파일이 빠져 있습니다. 버전을 올려 새 태그로 내세요'; exit 1 ;;
+            *)
+              # 불변 여부를 모르는 공개 릴리스는 덮어쓰지 않는다 (불변이면 업로드에서 실패해 표시 복구까지 가지 못한다)
+              echo '::error::공개된 릴리스의 불변 여부를 확인하지 못했습니다'; exit 1 ;;
+          esac
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}

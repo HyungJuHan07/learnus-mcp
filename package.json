@@ -1,0 +1,44 @@
+{
+  "name": "learnus-mcp",
+  "version": "0.2.0",
+  "description": "비공식(Unofficial) LearnUs 읽기 전용 로컬 MCP 서버 — 연세대학교와 무관한 학생 프로젝트",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "learnus-mcp": "dist/index.cjs"
+  },
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "build": "esbuild src/index.ts --bundle --platform=node --target=node22 --format=cjs --outfile=dist/index.cjs --banner:js=\"#!/usr/bin/env node\" --define:import.meta.dirname=__dirname --define:import.meta.filename=__filename --metafile=dist/meta.json && node scripts/notices.ts",
+    "lint": "tsc && eslint . && prettier --check . && node scripts/check-secrets.ts",
+    "format": "prettier --write .",
+    "test": "vitest run",
+    "cli": "node src/index.ts",
+    "prepare": "git config core.hooksPath .githooks || true",
+    "pack": "npm run build && rm -rf dist/mcpb && mkdir -p dist/mcpb/server/cmaps && cp dist/index.cjs dist/mcpb/server/index.cjs && cp packaging/cmaps/*.bcmap packaging/cmaps/LICENSE dist/mcpb/server/cmaps/ && cp packaging/mcpb/manifest.json LICENSE dist/THIRD_PARTY_NOTICES.txt dist/mcpb/ && mcpb validate dist/mcpb/manifest.json && mcpb pack dist/mcpb dist/learnus.mcpb",
+    "build:installer": "esbuild scripts/install-chatgpt.ts --bundle --platform=node --target=node22 --format=cjs --outfile=dist/install.cjs --define:import.meta.dirname=__dirname --define:import.meta.filename=__filename",
+    "build:native": "node scripts/build-native.ts",
+    "pack:chatgpt": "npm run build && npm run build:installer && npm run build:native && node scripts/check-native.ts && node scripts/pack-chatgpt.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "cheerio": "^1.2.0",
+    "tough-cookie": "^6.0.2",
+    "unpdf": "^1.8.1",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@anthropic-ai/mcpb": "^2.1.2",
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^24.19.1",
+    "esbuild": "^0.28.2",
+    "eslint": "^10.12.0",
+    "prettier": "^3.9.9",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.71.1",
+    "vitest": "^5.0.3"
+  }
+}

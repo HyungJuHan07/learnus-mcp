@@ -1,0 +1,48 @@
+name: ci
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+# LearnUs에 접속·로그인하는 작업은 여기서 절대 실행하지 않는다 (AGENTS.md 금지).
+# actions는 태그가 바뀌어도 그대로이도록 커밋 SHA로 고정한다 (주석은 그 SHA의 태그).
+jobs:
+  check:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+      # .mcpb를 실제로 만들어 mcpb validate까지 본다 (pack 스크립트는 sh 명령이라 윈도우는 Git Bash로)
+      - if: runner.os != 'Windows'
+        run: npm run pack
+      - if: runner.os == 'Windows'
+        run: npm run pack --script-shell "C:\Program Files\Git\bin\bash.exe"
+      # 금고에 접근하지 않고 헬퍼 빌드·잘못된 입력 거절·GPT 패키징만 검사한다.
+      - if: runner.os != 'Linux'
+        run: npm run pack:chatgpt
+      # 만든 설치 파일을 한글·공백 폴더에 풀어 AI 앱처럼 켜 본다 (네트워크 막음, 맥·윈도우는 금고에 가짜 값 왕복)
+      - run: node scripts/smoke-package.ts
+      # 실기기 확인용: 수동 실행(Run workflow)일 때만 설치 파일을 올린다 (3일 보관, push·PR 실행은 올리지 않음)
+      - if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: learnus-${{ runner.os }}
+          path: |
+            dist/learnus.mcpb
+            dist/learnus-chatgpt-*
+            dist/SHA256SUMS-chatgpt-*
+          retention-days: 3
+          if-no-files-found: error
